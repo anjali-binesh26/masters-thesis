@@ -22,3 +22,5 @@ venv/
 
 # Generated outputs (uncomment if you don't want to version them)
 # output/
+# Controller execution reports (may contain lab identifiers)
+logs/

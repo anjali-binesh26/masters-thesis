@@ -1,421 +1,206 @@
-"""
-Input validation module for Amarisoft MME Remote API messages.
+"""A deliberately bounded Remote API policy for ltemme.pdf, version 2024-06-15.
 
-Validates message dictionaries before transmission to ensure required fields
-are present, types are correct, and values are within acceptable bounds.
+Schemas describe supported operations, not lab test cases. Unknown fields fail
+closed. Printed manual pages: messages 57-60, timers 62-63, UE 77-79,
+EPS modification 86-87, PDU modification 87-88, GBR 33.
 """
-
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+import copy
+import json
+import math
 import re
 
+BLOCKED_MESSAGES = frozenset({'quit', 'log_reset', 'ue_del', 'ue_detach', 'me_del'})
+READ_MESSAGES = frozenset({'config_get', 'ue_get', 'stats', 'log_get'})
+LOG_LAYERS = ('nas ip s1ap ngap gtpu rx s6 cx s13 sgsap sbcap lcsap lppa '
+              'n12 n13 n8 n17 n50 n5 nl1 nrppa epdg ikev2 ipsec n20').split()
 
-class ValidationError(Exception):
-    """Raised when an API request dictionary fails validation against its schema."""
+
+class ValidationError(ValueError):
     pass
 
 
-# ----------------------------------------------------------------------
-# Message Schemas Definition
-# ----------------------------------------------------------------------
-# Schema layout per message:
-#   "parameters": {
-#       "<param_name>": {
-#           "type": type or tuple of types (e.g. str, int, bool, dict, list),
-#           "required": bool (default: False),
-#           "min_value": number (optional, for numeric range),
-#           "max_value": number (optional, for numeric range),
-#           "min_length": int (optional, for strings/sequences),
-#           "max_length": int (optional, for strings/sequences),
-#           "pattern": str (optional regex, for strings),
-#           "choices": list or set (optional allowed enum values),
-#           "schema": dict (optional nested object schema),
-#           "item_schema": dict (optional schema for items in a list),
-#           "validator": callable(val) -> Optional[str] (optional custom check),
-#       }
-#   },
-#   "required_one_of": list of lists (e.g. [["imsi", "nai"]]),
-#   "allow_unknown_fields": bool (default: False)
+def integer(low=None, high=None, required=False):
+    return dict(type=int, min=low, max=high, required=required)
 
-MESSAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
-    "ue_get": {
-        "parameters": {
-            "imsi": {
-                "type": str,
-                "required": False,
-                "min_length": 14,
-                "max_length": 15,
-                "pattern": r"^\d{14,15}$",
-            },
-            "nai": {
-                "type": str,
-                "required": False,
-            },
-            "imei": {
-                "type": str,
-                "required": False,
-                "min_length": 14,
-                "max_length": 16,
-            },
-            "type": {
-                "type": str,
-                "required": False,
-                "choices": ["3gpp", "n3gpp", "both"],
-            },
-            "stats": {
-                "type": bool,
-                "required": False,
-            },
-            "radio_capabilities": {
-                "type": bool,
-                "required": False,
-            },
-        },
-        "allow_unknown_fields": False,
-    },
-    "config_set": {
-        "parameters": {
-            "relative_capacity": {
-                "type": int,
-                "required": False,
-                "min_value": 0,
-                "max_value": 255,
-            },
-            "log_options": {
-                "type": str,
-                "required": False,
-            },
-            "authentication_mode": {
-                "type": str,
-                "required": False,
-                "choices": ["auto", "force", "skip"],
-            },
-        },
-        "allow_unknown_fields": False,
-    },
-    "config_get": {
-        "parameters": {},
-        "allow_unknown_fields": False,
-    },
-    "stats": {
-        "parameters": {},
-        "allow_unknown_fields": False,
-    },
-    "ue_modify_bearer": {
-        "parameters": {
-            "imsi": {
-                "type": str,
-                "required": True,
-            },
-            "erab_id": {
-                "type": int,
-                "required": True,
-                "min_value": 1,
-            },
-            "qos": {
-                "type": dict,
-                "required": False,
-                "schema": {
-                    "parameters": {
-                        "qci": {
-                            "type": int,
-                            "required": False,
-                            "min_value": 1,
-                            "max_value": 255,
-                        },
-                        "priority_level": {
-                            "type": int,
-                            "required": False,
-                            "min_value": 1,
-                            "max_value": 15,
-                        },
-                        "pre_emption_capability": {
-                            "type": str,
-                            "required": False,
-                            "choices": [
-                                "shall_not_trigger_pre_emption",
-                                "may_trigger_pre_emption",
-                            ],
-                        },
-                        "pre_emption_vulnerability": {
-                            "type": str,
-                            "required": False,
-                            "choices": [
-                                "not_pre_emptable",
-                                "pre_emptable",
-                            ],
-                        },
-                    },
-                    "allow_unknown_fields": False,
-                },
-            },
-        },
-        "allow_unknown_fields": False,
-    },
-    "ue_activate_dedicated_bearer": {
-        "parameters": {
-            "imsi": {
-                "type": str,
-                "required": False,
-            },
-            "nai": {
-                "type": str,
-                "required": False,
-            },
-            "apn": {
-                "type": str,
-                "required": True,
-            },
-            "qci": {
-                "type": int,
-                "required": True,
-                "min_value": 1,
-                "max_value": 255,
-            },
-            "gbr": {
-                "type": dict,
-                "required": False,
-            },
-            "priority_level": {
-                "type": int,
-                "required": False,
-                "min_value": 1,
-                "max_value": 15,
-            },
-        },
-        "required_one_of": [["imsi", "nai"]],
-        "allow_unknown_fields": False,
-    },
-    "ue_modify_pdu_session": {
-        "parameters": {
-            "imsi": {
-                "type": str,
-                "required": False,
-            },
-            "nai": {
-                "type": str,
-                "required": False,
-            },
-            "pdu_session_id": {
-                "type": int,
-                "required": True,
-                "min_value": 1,
-            },
-            "qos_flow": {
-                "type": list,
-                "required": False,
-                "item_schema": {
-                    "parameters": {
-                        "qfi": {
-                            "type": int,
-                            "required": False,
-                            "min_value": 0,
-                            "max_value": 63,
-                        },
-                        "5qi": {
-                            "type": int,
-                            "required": False,
-                            "min_value": 1,
-                            "max_value": 254,
-                        },
-                    },
-                    "allow_unknown_fields": False,
-                },
-            },
-        },
-        "required_one_of": [["imsi", "nai"]],
-        "allow_unknown_fields": False,
-    },
+
+def string(choices=None, pattern=None, required=False):
+    return dict(type=str, choices=choices, pattern=pattern, required=required)
+
+
+def obj(fields, required=False):
+    return dict(type=dict, fields=fields, required=required)
+
+
+LEVEL = string(['none', 'error', 'info', 'debug'])
+# Manual log_options accepts none/error/info/debug (printed page 9).
+CAPABILITY = string(['shall_not_trigger_pre_emption', 'may_trigger_pre_emption'])
+VULNERABILITY = string(['not_pre_emptable', 'pre_emptable'])
+IMSI = string(pattern=r'[0-9]{5,15}')
+IMEI = string(pattern=r'[0-9]{14,15}')
+GBR = obj({name: integer(1, required=True) for name in (
+    'maximum_bitrate_dl', 'maximum_bitrate_ul',
+    'guaranteed_bitrate_dl', 'guaranteed_bitrate_ul')})
+QOS_CHARACTERISTICS = obj({
+    'priority_level': integer(0,127), 'packet_delay_budget': integer(-1,1023),
+    'extended_packet_delay_budget': integer(-1,109999),
+    'packet_error_rate': string(pattern=r'[0-9]E-[0-9]'),
+    'averaging_window': integer(-1,4095), 'maximum_data_burst_volume': integer(-1,2000000),
+    'cn_packet_delay_budget_dl': integer(-1,1099990),
+    'cn_packet_delay_budget_ul': integer(-1,1099990),
+})
+ARP = {'priority_level': integer(1,15), 'pre_emption_capability': CAPABILITY,
+       'pre_emption_vulnerability': VULNERABILITY, 'gbr': GBR}
+FLOW = dict(qfi=integer(0,63,True), **{'5qi':integer(1,254,True)},
+            **{k:dict(v, required=k != 'gbr') for k,v in ARP.items()},
+            **{'5qi_qos':QOS_CHARACTERISTICS})
+CONFIG_FIELDS = {
+    'logs': obj({'layers': obj({layer: obj({
+        'level': LEVEL, 'max_size': integer(-1), 'key':dict(type=bool),
+        'crypto':dict(type=bool), 'payload':dict(type=bool), 'verbose':dict(type=bool),
+    }) for layer in LOG_LAYERS})}),
+    'relative_capacity': integer(0,255),
+    'authentication_mode': string(['auto','force','skip']),
+    't3402': integer(-1), 't3412': integer(-1), 't3412_low_priority': integer(-1),
+    't3512': integer(-1), 't3501': integer(1,30),
+    'psm': dict(type=bool), 'mico_support':dict(type=bool),
+}
+MESSAGE_SCHEMAS = {
+    'config_get': {}, 'stats': {},
+    'ue_get': {'imsi':IMSI, 'nai':string(), 'imei':IMEI,
+               'type':string(['3gpp','n3gpp','both']), 'radio_capabilities':dict(type=bool)},
+    'config_set': CONFIG_FIELDS,
+    'ue_modify_bearer': {'imsi':dict(IMSI,required=True), 'imei':IMEI,
+        'erab_id':integer(5,15,True),
+        'qos':obj(dict(qci=integer(1,255,True), **ARP), True)},
+    'ue_modify_pdu_session': {'imsi':IMSI, 'nai':string(), 'imei':IMEI,
+        'n3gpp':dict(type=bool), 'pdu_session_id':integer(1,15,True),
+        'qos_flow':dict(type=list, items=FLOW, required=True)},
+    'log_get': {'min':integer(0), 'max':integer(1,4096),
+        'timeout':dict(type=(int,float),min=0,max=30), 'allow_empty':dict(type=bool),
+        'ue_id':integer(0), 'layers':obj({k:LEVEL for k in LOG_LAYERS}),
+        'short':dict(type=bool), 'headers':dict(type=bool),
+        'max_size':integer(1,1048576),
+        'start_timestamp':dict(type=(int,float),min=0),
+        'end_timestamp':dict(type=(int,float),min=0)},
 }
 
 
-# ----------------------------------------------------------------------
-# Validation Logic
-# ----------------------------------------------------------------------
-
-def _validate_field(field_name: str, value: Any, rule: Dict[str, Any], context_name: str) -> None:
-    """Validate a single field's type, range, length, pattern, choices, nested schema, and custom rules."""
-    expected_type = rule.get("type")
-    if expected_type is not None:
-        # Guard: In Python, bool is a subclass of int. Prevent booleans from passing as int.
-        if (
-            expected_type is int
-            or (
-                isinstance(expected_type, tuple)
-                and int in expected_type
-                and bool not in expected_type
-            )
-        ) and isinstance(value, bool):
-            type_repr = (
-                expected_type.__name__
-                if hasattr(expected_type, "__name__")
-                else str(expected_type)
-            )
-            raise ValidationError(
-                f"Field '{field_name}' in '{context_name}' must be of type {type_repr}, got bool."
-            )
-
-        if not isinstance(value, expected_type):
-            type_repr = (
-                expected_type.__name__
-                if hasattr(expected_type, "__name__")
-                else tuple(t.__name__ for t in expected_type)
-                if isinstance(expected_type, tuple)
-                else str(expected_type)
-            )
-            raise ValidationError(
-                f"Field '{field_name}' in '{context_name}' must be of type {type_repr}, "
-                f"got {type(value).__name__}."
-            )
-
-    # Nested object schema validation
-    if "schema" in rule and isinstance(value, dict):
-        _validate_object(value, rule["schema"], f"{context_name}.{field_name}")
-
-    # List of objects item schema validation
-    if "item_schema" in rule and isinstance(value, list):
-        for idx, item in enumerate(value):
-            if not isinstance(item, dict):
-                raise ValidationError(
-                    f"Item at index {idx} in '{field_name}' of '{context_name}' must be a dictionary, "
-                    f"got {type(item).__name__}."
-                )
-            _validate_object(item, rule["item_schema"], f"{context_name}.{field_name}[{idx}]")
-
-    # Numeric range validation
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        min_val = rule.get("min_value")
-        max_val = rule.get("max_value")
-        if min_val is not None and value < min_val:
-            raise ValidationError(
-                f"Field '{field_name}' value {value} in '{context_name}' is below minimum allowed value of {min_val}."
-            )
-        if max_val is not None and value > max_val:
-            raise ValidationError(
-                f"Field '{field_name}' value {value} in '{context_name}' exceeds maximum allowed value of {max_val}."
-            )
-
-    # String / sequence length validation
-    if isinstance(value, (str, list, dict)):
-        min_len = rule.get("min_length")
-        max_len = rule.get("max_length")
-        if min_len is not None and len(value) < min_len:
-            raise ValidationError(
-                f"Field '{field_name}' length {len(value)} in '{context_name}' is shorter than minimum allowed length {min_len}."
-            )
-        if max_len is not None and len(value) > max_len:
-            raise ValidationError(
-                f"Field '{field_name}' length {len(value)} in '{context_name}' exceeds maximum allowed length {max_len}."
-            )
-
-    # String regex pattern validation
-    pattern = rule.get("pattern")
-    if pattern and isinstance(value, str):
-        if not re.match(pattern, value):
-            raise ValidationError(
-                f"Field '{field_name}' with value '{value}' in '{context_name}' does not match required pattern '{pattern}'."
-            )
-
-    # Choices / enum validation
-    choices = rule.get("choices")
-    if choices is not None and value not in choices:
-        raise ValidationError(
-            f"Field '{field_name}' value '{value}' in '{context_name}' is invalid. Allowed choices: {choices}."
-        )
-
-    # Custom callable validator
-    validator: Optional[Callable[[Any], Optional[str]]] = rule.get("validator")
-    if callable(validator):
-        error_msg = validator(value)
-        if error_msg:
-            raise ValidationError(
-                f"Field '{field_name}' in '{context_name}' failed validation: {error_msg}"
-            )
+def strict_json(text):
+    """Reject duplicate keys and non-JSON NaN/Infinity; never extract substrings."""
+    def pairs(items):
+        result = {}
+        for key,value in items:
+            if key in result:
+                raise ValidationError(f'Duplicate JSON key: {key}')
+            result[key] = value
+        return result
+    def constant(value):
+        raise ValidationError(f'Invalid JSON constant: {value}')
+    try:
+        return json.loads(text, object_pairs_hook=pairs, parse_constant=constant)
+    except json.JSONDecodeError as exc:
+        raise ValidationError(f'Invalid JSON: {exc}') from exc
 
 
-def _validate_object(data: dict, schema: dict, context_name: str) -> None:
-    """Validate a dictionary against an object schema (checking required, one-of, unexpected, and field rules)."""
-    param_rules = schema.get("parameters", {})
-    allow_unknown = schema.get("allow_unknown_fields", False)
+def _fields(data, schema, path, partial=False):
+    unknown = set(data) - set(schema)
+    if unknown:
+        raise ValidationError(f'{path}: unsupported fields {sorted(unknown)}')
+    for key,rule in schema.items():
+        if rule.get('required') and key not in data and not partial:
+            raise ValidationError(f'{path}: missing required field {key}')
+    for key,value in data.items():
+        rule = schema[key]
+        name = f'{path}.{key}'
+        expected = rule['type']
+        if not isinstance(value,expected) or (isinstance(value,bool) and expected is not bool):
+            raise ValidationError(f'{name}: incorrect type')
+        if isinstance(value,(int,float)) and not isinstance(value,bool):
+            if isinstance(value,float) and not math.isfinite(value):
+                raise ValidationError(f'{name}: must be finite')
+            if rule.get('min') is not None and value < rule['min']:
+                raise ValidationError(f'{name}: below minimum {rule["min"]}')
+            if rule.get('max') is not None and value > rule['max']:
+                raise ValidationError(f'{name}: exceeds maximum {rule["max"]}')
+        if isinstance(value,str):
+            if not value.strip():
+                raise ValidationError(f'{name}: cannot be empty')
+            if rule.get('choices') and value not in rule['choices']:
+                raise ValidationError(f'{name}: expected one of {rule["choices"]}')
+            if rule.get('pattern') and not re.fullmatch(rule['pattern'],value):
+                raise ValidationError(f'{name}: invalid format')
+        if isinstance(value,dict):
+            if not value:
+                raise ValidationError(f'{name}: empty object')
+            _fields(value,rule['fields'],name,partial)
+            if key == 'gbr' and not partial:
+                for direction in ('ul','dl'):
+                    if value[f'guaranteed_bitrate_{direction}'] > value[f'maximum_bitrate_{direction}']:
+                        raise ValidationError(f'{name}: guaranteed bitrate exceeds maximum')
+            if key == '5qi_qos' and not partial and 'packet_delay_budget' in value:
+                if not {'priority_level','packet_error_rate'} <= set(value):
+                    raise ValidationError(f'{name}: delay budget needs priority and error rate')
+        if isinstance(value,list):
+            if not value:
+                raise ValidationError(f'{name}: empty replacement list is prohibited')
+            for index,item in enumerate(value):
+                if not isinstance(item,dict) or not item:
+                    raise ValidationError(f'{name}[{index}]: expected nonempty object')
+                _fields(item,rule['items'],f'{name}[{index}]',partial)
 
-    # 1. Check for missing required parameters
-    for param_name, rule in param_rules.items():
-        if rule.get("required", False) and param_name not in data:
-            raise ValidationError(
-                f"Missing required parameter '{param_name}' for '{context_name}'."
-            )
 
-    # 2. Check for required_one_of constraint groups
-    for group in schema.get("required_one_of", []):
-        if not any(field in data for field in group):
-            group_str = " or ".join(f"'{f}'" for f in group)
-            raise ValidationError(
-                f"Message '{context_name}' requires at least one of: {group_str}."
-            )
+def normalize_message(request, *, qos_patch=False):
+    if not isinstance(request,dict):
+        raise ValidationError('Request must be a dictionary')
+    result = copy.deepcopy(request)
+    name = result.get('message')
+    if not isinstance(name,str) or not name.strip():
+        raise ValidationError("Request needs a nonempty 'message' string")
+    name = name.strip().lower()
+    if name in BLOCKED_MESSAGES:
+        raise PermissionError(f'{name} is blocked by security policy')
+    if name not in MESSAGE_SCHEMAS:
+        raise ValidationError(f'Unsupported message: {name}')
+    result['message'] = name
+    if 'parameters' in result:
+        params = result.pop('parameters')
+        if not isinstance(params,dict):
+            raise ValidationError('parameters must be an object')
+        if set(params) & (set(result) | {'message','message_id','parameters'}):
+            raise ValidationError('Conflicting or reserved nested parameters')
+        result.update(params)
+    if 'message_id' in result and (type(result['message_id']) not in (str,int)):
+        raise ValidationError('message_id must be a string or integer')
+    params = {k:v for k,v in result.items() if k not in ('message','message_id')}
+    partial = qos_patch and name in ('ue_modify_bearer','ue_modify_pdu_session')
+    _fields(params,MESSAGE_SCHEMAS[name],name,partial)
+    if 'imsi' in params and 'nai' in params:
+        raise ValidationError('Use imsi or nai, not both')
+    if name == 'config_set' and not params:
+        raise ValidationError('config_set needs at least one change')
+    if name.startswith('ue_modify'):
+        if not ({'imsi','nai'} & set(params)):
+            raise ValidationError('A subscriber identifier is required')
+        if name == 'ue_modify_bearer':
+            if not {'imsi','erab_id','qos'} <= set(params):
+                raise ValidationError('Bearer update needs imsi, erab_id and qos')
+        else:
+            if not {'pdu_session_id','qos_flow'} <= set(params):
+                raise ValidationError('PDU update needs pdu_session_id and qos_flow')
+            flows = params['qos_flow']
+            ids = [f.get('qfi') for f in flows]
+            if None in ids or len(ids) != len(set(ids)):
+                raise ValidationError('Every flow needs a unique qfi')
+            if partial and any(set(f) == {'qfi'} for f in flows):
+                raise ValidationError('QoS patch must change a flow parameter')
+    return result
 
-    # 3. Check for unexpected / unknown fields
-    if not allow_unknown:
-        for param_name in data:
-            if param_name not in param_rules:
-                allowed_keys = list(param_rules.keys())
-                raise ValidationError(
-                    f"Unexpected parameter '{param_name}' for '{context_name}'. Allowed parameters: {allowed_keys}."
-                )
 
-    # 4. Validate each supplied parameter against its rules
-    for param_name, value in data.items():
-        if param_name in param_rules:
-            _validate_field(param_name, value, param_rules[param_name], context_name)
+def validate_message(request):
+    normalize_message(request)
 
 
-def validate_message(request: dict) -> None:
-    """
-    Validate a message dictionary before sending to AmarisoftAPI.
-
-    Parameters:
-        request (dict): The request payload containing at least a 'message' key.
-
-    Raises:
-        ValidationError: If request is not a dict, 'message' is missing/invalid,
-                         an unknown message is specified, required fields are missing,
-                         types mismatch, or values are out of range.
-    """
-    if not isinstance(request, dict):
-        raise ValidationError(f"Request must be a dictionary, got {type(request).__name__}.")
-
-    raw_message = request.get("message")
-    if not raw_message or not isinstance(raw_message, str):
-        raise ValidationError("Request dictionary must contain a non-empty string 'message' key.")
-
-    message_name = raw_message.strip().lower()
-
-    if message_name not in MESSAGE_SCHEMAS:
-        valid_types = list(MESSAGE_SCHEMAS.keys())
-        raise ValidationError(
-            f"Unknown or unsupported message type '{raw_message}'. Supported types: {valid_types}."
-        )
-
-    # Validate optional top-level 'message_id' if present
-    if "message_id" in request:
-        msg_id = request["message_id"]
-        if not isinstance(msg_id, (int, str)):
-            raise ValidationError(
-                f"'message_id' must be an integer or string, got {type(msg_id).__name__}."
-            )
-
-    schema = MESSAGE_SCHEMAS[message_name]
-
-    # Extract parameters to validate
-    # Supports both top-level fields (e.g. {"message": "...", "imsi": "..."})
-    # and nested parameters dictionary (e.g. {"message": "...", "parameters": {"imsi": "..."}})
-    if "parameters" in request:
-        if not isinstance(request["parameters"], dict):
-            raise ValidationError(
-                f"'parameters' field must be a dictionary, got {type(request['parameters']).__name__}."
-            )
-        params_to_validate = dict(request["parameters"])
-        top_extra = {k: v for k, v in request.items() if k not in ("message", "message_id", "parameters")}
-        params_to_validate.update(top_extra)
-    else:
-        params_to_validate = {k: v for k, v in request.items() if k not in ("message", "message_id")}
-
-    _validate_object(params_to_validate, schema, raw_message)
+def positive_timeout(value):
+    if type(value) not in (int,float) or not math.isfinite(value) or value <= 0:
+        raise ValidationError('Timeout must be finite and positive')
+    return value
