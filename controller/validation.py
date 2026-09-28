@@ -103,6 +103,17 @@ def strict_json(text):
 
 
 def _fields(data, schema, path, partial=False):
+    if path == 'config_set.logs.layers':
+        names = [key.lower() for key in data]
+        if len(names) != len(set(names)):
+            raise ValidationError(
+                'Duplicate logging layer names with different capitalization'
+            )
+        schema = {
+            key: schema[key.lower()]
+            for key in data
+            if key.lower() in schema
+        }
     unknown = set(data) - set(schema)
     if unknown:
         raise ValidationError(f'{path}: unsupported fields {sorted(unknown)}')

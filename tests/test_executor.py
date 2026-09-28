@@ -171,6 +171,29 @@ class TestExecutor(unittest.TestCase):
                             {'message':'config_set','t3512':1800})
         self.assertEqual(self.run_plan(plan,after_apply=lambda s:True)['status'],'verification_failed')
 
+    def test_uppercase_logging_response(self):
+        before = {'logs': {'layers': {'NAS': {'level': 'debug'}}}}
+        after = {'logs': {'layers': {'NAS': {'level': 'info'}}}}
+        request = {
+            'message': 'config_set',
+            'logs': {'layers': {'nas': {'level': 'info'}}}
+        }
+
+        self.api.send.side_effect = [before, before, {}, after]
+        result = self.run_plan(self.prepare(request))
+
+        self.assertEqual(result['status'], 'verified')
+        self.assertEqual(
+            result['compensation']['logs']['layers']['NAS']['level'],
+            'debug'
+        )
+
+        sent = self.api.send.call_args_list[2].args[0]
+        self.assertEqual(
+            sent['logs']['layers'],
+            {'NAS': {'level': 'info'}}
+        )
+
     def qos(self):
         return {'message':'ue_modify_pdu_session','imsi':'001010123456789',
                 'imei':'12345678901234','pdu_session_id':1,'qos_flow':[flow(2),flow(3)]}

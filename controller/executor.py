@@ -59,7 +59,17 @@ def _leaves(data, prefix=()):
 
 
 def _get(data, path):
-    for part in path.split('.'):
+    parts = path.split('.')
+    for index, part in enumerate(parts):
+        # Match logging layer names regardless of capitalization.
+        if index == 2 and parts[:2] == ['logs', 'layers']:
+            matches = [
+                key for key in data
+                if key.lower() == part.lower()
+            ]
+            if len(matches) != 1:
+                raise KeyError(f'Missing or ambiguous logging layer: {part}')
+            part = matches[0]
         data = data[part]
     return copy.deepcopy(data)
 
@@ -206,6 +216,27 @@ def prepare_execution(api, request, *, baseline=None, timeout=5.0):
     if timers and len(params) != 1:
         raise ValidationError('Registration timer changes must be separate from other settings')
     current = _send(api,{'message':'config_get'},timeout)
+    
+    if 'logs' in request:
+        live_layers = current.get('logs', {}).get('layers', {})
+        if not isinstance(live_layers, dict):
+            raise ValidationError('Invalid logging layers in config_get')
+
+        resolved = {}
+        for requested_name, settings in request['logs']['layers'].items():
+            matches = [
+                name for name in live_layers
+                if name.lower() == requested_name.lower()
+            ]
+            if len(matches) != 1:
+                raise ValidationError(
+                    f'Missing or ambiguous logging layer: {requested_name}'
+                )
+            resolved[matches[0]] = settings
+
+        request['logs']['layers'] = resolved
+        params = _params(request)
+        expected = _leaves(params)
     if 'logs' in params and current.get('logs',{}).get('locked'):
         raise ValidationError('Server logging is locked')
     supplied = normalize_message(baseline) if baseline is not None else None
