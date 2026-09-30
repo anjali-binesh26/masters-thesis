@@ -65,6 +65,24 @@ CONFIG_FIELDS = {
     'psm': dict(type=bool), 'mico_support':dict(type=bool),
 }
 MESSAGE_SCHEMAS = {
+    # Bounded NR feasibility operations (vendor pp. 85-89 and TFT pp. 33-34).
+    # Execution is available only through the dedicated flow lifecycle runner.
+    'ue_activate_dedicated_bearer': {
+        'imsi': dict(IMSI, required=True), 'imei': dict(IMEI, required=True),
+        'apn': string(pattern=r'[A-Za-z0-9][A-Za-z0-9.-]{0,99}', required=True),
+        'sst': integer(0,255,True), 'sd': integer(0,16777215),
+        'qci': integer(5,9,True),
+        'priority_level': integer(1,15,True),
+        'pre_emption_capability': dict(CAPABILITY,required=True),
+        'pre_emption_vulnerability': dict(VULNERABILITY,required=True),
+        'filters': dict(type=list,required=True,items={
+            'direction':string(['dl','ul','both'],required=True),
+            'id':integer(0,14,True), 'precedence':integer(0,254,True),
+            'components':dict(type=list,required=True,items={
+                'proto_id':integer(0,255), 'remote_port':integer(1,65535)})})},
+    'ue_deactivate_bearer': {
+        'imsi':dict(IMSI,required=True), 'imei':dict(IMEI,required=True),
+        'pdu_session_id':integer(1,15,True), 'qos_flow_id':integer(1,63,True)},
     'config_get': {}, 'stats': {},
     'ue_get': {'imsi':IMSI, 'nai':string(), 'imei':IMEI,
                'type':string(['3gpp','n3gpp','both']), 'radio_capabilities':dict(type=bool)},
@@ -185,6 +203,18 @@ def normalize_message(request, *, qos_patch=False):
     params = {k:v for k,v in result.items() if k not in ('message','message_id')}
     partial = qos_patch and name in ('ue_modify_bearer','ue_modify_pdu_session')
     _fields(params,MESSAGE_SCHEMAS[name],name,partial)
+    if name == 'ue_activate_dedicated_bearer':
+        filters = params['filters']
+        if len({f['id'] for f in filters}) != len(filters):
+            raise ValidationError('Filter IDs must be unique')
+        if len({f['precedence'] for f in filters}) != len(filters):
+            raise ValidationError('Filter precedences must be unique')
+        if any(f['precedence'] == 80 for f in filters):
+            raise ValidationError('Filter precedence 80 is reserved in 5GS')
+        for f in filters:
+            keys = [next(iter(c)) for c in f['components']]
+            if any(len(c) != 1 for c in f['components']) or len(keys) != len(set(keys)):
+                raise ValidationError('Use distinct single-property filter components')
     if 'imsi' in params and 'nai' in params:
         raise ValidationError('Use imsi or nai, not both')
     if name == 'config_set' and not params:

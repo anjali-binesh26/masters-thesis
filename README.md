@@ -146,3 +146,10 @@ To supply live context to NetSight later, deliberately copy the relevant current
 The API client is `controller.amarisoft_api`. Historical `scripts/mme_ws_test.py`
 is not imported by this pipeline. Supported fields are based on the supplied
 ltemme.pdf version 2024-06-15. Tests use mocks; live lab verification remains pending.
+## UC2 preparation: QoS flow feasibility
+
+The separate `scripts/qos_flow_trial.py` runner exercises a human-approved,
+one-phone create/check/remove/check lifecycle. It is not yet a multi-phone UC2
+executor or proof of QoS performance. Start with the read-only preflight and
+establish the APN release policy before any write. Instructions and limitations:
+[UC2 QoS feasibility](tests/uc2_qos_feasibility.md).
