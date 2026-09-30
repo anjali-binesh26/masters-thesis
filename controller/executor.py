@@ -205,6 +205,8 @@ def prepare_execution(api, request, *, baseline=None, timeout=5.0):
     """Read-only preflight. baseline is local operator input, never LLM output."""
     positive_timeout(timeout)
     request = normalize_message(request,qos_patch=True)
+    if request['message'] in ('ue_activate_dedicated_bearer','ue_deactivate_bearer'):
+        raise ValidationError('Flow creation/removal requires the dedicated qos_flow_trial.py lifecycle runner')
     request.pop('message_id',None)
     if request['message'] in READ_MESSAGES:
         return ExecutionPlan(request)
