@@ -46,6 +46,52 @@ UE re-registration and, where unreadable globally, a trusted operator baseline.
 QoS changes require a complete current baseline and manual signalling evidence;
 an acknowledgment is never labelled verified success.
 
+## Reviewed NetSight file handoff
+
+After NetSight finishes, run from masters-thesis:
+
+```bash
+python scripts/netsight_handoff.py --host <CALLBOX_IP> --port 9000
+```
+
+This reads the sibling NetSight checkout's `attachments/operator_request.txt`
+and `output/interfaces.md`. Use `--netsight-dir PATH` for another checkout, or
+`--output PATH` and `--operator-request PATH` for other file locations.
+No NetSight source changes, model call, chat interface or background watcher is required.
+
+1. Review the operator instruction, full model response and validated JSON.
+2. Type `COPY` to replace project request.json, or anything else to cancel.
+3. Type `RUN` to launch the controller, or stop with the copied file only.
+4. The controller still asks `CONNECT` before network access and `APPLY` before
+   a change. Timer changes still require manual re-registration and `CHECK`.
+
+For timers or QoS requiring an operator baseline, add `--baseline baseline-timer.json`
+(or the appropriate baseline file) to the handoff command. The model cannot select
+the endpoint, provide a trusted baseline, approve execution or bypass validation.
+
+Accepted model format: exactly one `Status: READY` line outside code fences and
+one fenced `json` API object. Prose explanations remain visible for human review.
+`NEEDS_INPUT` and `UNSUPPORTED` leave request.json untouched. Multiple code blocks,
+invalid fields, blocked operations and malformed JSON are rejected, not guessed.
+This mode does not parse the optional versioned-envelope workflow below.
+
+An output older than the operator-request file is refused. Modification times do
+not prove the files belong together; inspect them before COPY. Do not run the
+handoff while NetSight is still writing its output. Changed source contents during
+COPY review abort the handoff.
+
+Approved source input/output and the selected JSON are archived under ignored
+`logs/handoff-<ID>/`. The controller executes that saved request snapshot so later
+edits to shared request.json cannot replace the approved operation. The associated
+controller report is `logs/uc1-<ID>.json`; handoff.json records hashes and approvals.
+Raw archives may contain lab identifiers and must remain private. They support
+traceability but are not tamper-proof or an independent check of operator intent.
+Use the evidence exporter/recorder for publishable controller summaries.
+
+Removing NetSight's Git remote is separate from this workflow: run
+`git remote remove origin` inside each NetSight clone you want to disconnect.
+Files and history are retained; it does not disconnect another computer's clone.
+
 ## Export controller evidence into an LLM run document
 
 Raw controller reports remain private in `logs/`. The offline exporter produces
