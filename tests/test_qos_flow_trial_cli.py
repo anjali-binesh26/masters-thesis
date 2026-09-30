@@ -64,6 +64,21 @@ class TestQoSTrialCLI(unittest.TestCase):
             api.connect.assert_not_called()
             api.send.assert_not_called()
 
+    def test_default_assumption_requires_distinct_approval_and_is_recorded(self):
+        for token,accepted in [('POLICY',False),('ASSUME_DEFAULT',True)]:
+            with self.subTest(token=token), tempfile.TemporaryDirectory() as root:
+                inputs = ['CONNECT','No overrides in checked config; runtime unknown',token]
+                if accepted:
+                    inputs.append('NO')  # decline CREATE; test policy evidence only
+                _,api,report,_ = self.run_cli(root,inputs,[state()],
+                    ['--execute','--assume-release-default'])
+                policy = report['release_policy']
+                self.assertEqual(policy['basis'],'documented_default_assumption')
+                self.assertEqual(policy['operator_confirmed'],accepted)
+                self.assertEqual(policy['session_release_risk_accepted'],accepted)
+                self.assertFalse(policy['runtime_verified_by_runner'])
+                self.assertEqual(api.send.call_count,1)
+
     def test_cleanup_from_private_report_never_recreates(self):
         with tempfile.TemporaryDirectory() as root:
             _,_,_,source = self.run_cli(root,['CONNECT','checked','POLICY','CREATE','NO'],
