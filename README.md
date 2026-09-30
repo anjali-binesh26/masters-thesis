@@ -46,6 +46,43 @@ UE re-registration and, where unreadable globally, a trusted operator baseline.
 QoS changes require a complete current baseline and manual signalling evidence;
 an acknowledgment is never labelled verified success.
 
+## Export controller evidence into an LLM run document
+
+Raw controller reports remain private in `logs/`. The offline exporter produces
+an allowlisted summary: UTC timestamps, run ID, supported parameter changes,
+approval decisions, verification results and request/response operation names.
+It omits subscriber/device identifiers, endpoints, license details, local paths,
+raw API responses and free-text errors. Detailed errors stay in the private report.
+Targets are omitted, so a QoS summary alone cannot establish correct device selection.
+
+List reports chronologically (timestamps help selection; they do not prove linkage):
+
+```bash
+python scripts/export_uc1_evidence.py --list
+```
+
+Preview an append to an existing run document, then repeat with `--write` to save:
+
+```bash
+python scripts/export_uc1_evidence.py logs/uc1-RUN-ID.json --output "llm_outputs/use case 1/uc1 outputs v1.md" --kind llm-trial
+python scripts/export_uc1_evidence.py logs/uc1-RUN-ID.json --output "llm_outputs/use case 1/uc1 outputs v1.md" --kind llm-trial --write
+```
+
+Use `--kind llm-trial` only when you associate the actual LLM proposal with this
+execution; this records your association, not automatic proof of unchanged input.
+Use `--kind restoration` for a restore report, or the default `independent` for
+a separately performed controller test. Multiple explicit report files can be
+passed together; they are sorted by start time within that export. Already recorded
+run IDs are skipped. Existing document sections retain their original order.
+Without `--output`, `--write` creates a timestamped file under
+`llm_outputs/controller evidence/` for each selected report.
+
+The exporter does not contact the network or alter raw reports. The raw-report
+SHA-256 fingerprint allows later comparison with the privately retained original;
+it is not a digital signature. Review the complete Markdown before publishing:
+existing LLM/terminal text is preserved and is NOT sanitized. The exporter does
+not infer a failure reason from omitted text or turn unverified outcomes into success.
+
 ## Optional NetSight handoff (later)
 
 ```bash
