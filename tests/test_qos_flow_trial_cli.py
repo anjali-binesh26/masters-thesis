@@ -94,6 +94,33 @@ class TestQoSTrialCLI(unittest.TestCase):
             self.assertEqual(writes,['ue_deactivate_bearer'])
             self.assertTrue(report['result']['restoration_verified'])
 
+    def test_reconciled_cleanup_requires_approval_and_preserves_original(self):
+        for approval in ('NO','RECONCILE'):
+            with self.subTest(approval=approval), tempfile.TemporaryDirectory() as root:
+                _,_,original,source = self.run_cli(root,['CONNECT','checked','POLICY','CREATE'],
+                    [state(),state(),TimeoutError('lost')],['--execute'])
+                # MagicMock transport does not emit the real API's send/timeout audit events.
+                original['events'].extend([
+                    {'event':'send','payload':dict(original['plan']['request'],message_id='trial')},
+                    {'event':'timeout','payload':{'message':'ue_activate_dedicated_bearer','message_id':'trial'}}])
+                source.unlink()
+                stored = Path(root)/'original.json'
+                saved = json.dumps(original)
+                stored.write_text(saved)
+                inputs = ['CONNECT','checked','POLICY',approval]
+                responses = [state(flows=(3,))]
+                if approval == 'RECONCILE':
+                    inputs.extend(['CLEANUP','CHECK'])
+                    responses.extend([state(flows=(3,)),state(flows=(3,)),{},state()])
+                code,api,report,_ = self.run_cli(root,inputs,responses,
+                    ['--cleanup-from',str(stored),'--reconcile-qfi','3','--execute'])
+                self.assertEqual(stored.read_text(),saved)
+                self.assertNotIn('creation',report)
+                self.assertFalse(report['reconciliation']['creation_acknowledged'])
+                writes = [c.args[0]['message'] for c in api.send.call_args_list if c.args[0]['message']!='ue_get']
+                self.assertEqual(writes,['ue_deactivate_bearer'] if approval=='RECONCILE' else [])
+                self.assertEqual(code,0 if approval=='RECONCILE' else 2)
+
 
 if __name__ == '__main__':
     unittest.main()

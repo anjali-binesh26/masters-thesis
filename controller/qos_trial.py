@@ -116,10 +116,35 @@ def create(api, plan, *, confirm, record, policy_confirmed=False, timeout=5):
             'pdu_session_id':reply['pdu_session_id']}
 
 
+def reconcile_timeout(api, previous, qfi, timeout=5):
+    """Read-only recovery evidence; never manufacture an API creation receipt."""
+    plan = previous['plan']
+    request = normalize_message(plan['request'])
+    events = previous['events']
+    sends = [e['payload'] for e in events if e['event']=='send'
+             and e['payload'].get('message')=='ue_activate_dedicated_bearer']
+    if (previous.get('result',{}).get('status') != 'unknown' or len(sends) != 1
+            or any(e['event'] in ('creation_response','cleanup_intent') for e in events)
+            or request['message'] != 'ue_activate_dedicated_bearer'
+            or {k:v for k,v in sends[0].items() if k != 'message_id'} != request
+            or not any(e['event']=='timeout' and e['payload'].get('message_id')==sends[0].get('message_id')
+                       and e['payload'].get('message')==request['message'] for e in events)):
+        raise ValidationError('Recovery requires the original single-creation timeout report')
+    b = plan['before']
+    if any(request.get(k) != b.get(k) for k in ('imsi','imei','apn','sst','sd')):
+        raise ValidationError('Recorded request and baseline disagree')
+    evidence = {'status':'observed_after_timeout','qos_flow_id':qfi,
+                'pdu_session_id':b['pdu_session_id'], 'creation_acknowledged':False,
+                'qos_verified':False,
+                'basis':'Single new flow in unchanged session; operator must confirm attribution.'}
+    evidence['observed'] = observe(api,plan,evidence,timeout)
+    return evidence
+
+
 def cleanup_request(plan, receipt):
     qfi = receipt.get('qos_flow_id')
     b = plan['before']
-    if (receipt.get('status') not in ('accepted_unverified','flow_present')
+    if (receipt.get('status') not in ('accepted_unverified','flow_present','observed_after_timeout')
             or type(qfi) is not int or not 1 <= qfi <= 63
             or qfi == b['default_qfi'] or b['dedicated']
             or receipt.get('pdu_session_id') != b['pdu_session_id']):

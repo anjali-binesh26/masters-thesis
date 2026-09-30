@@ -47,8 +47,12 @@ def main(argv=None):
     parser.add_argument('--assume-release-default',action='store_true',
                         help='Allow explicit approval of the documented false default, not verified runtime policy')
     parser.add_argument('--cleanup-from',type=Path,help='Trusted private trial report; never LLM output')
+    parser.add_argument('--reconcile-qfi',type=int,
+                        help='With --cleanup-from: reconcile one observed flow after a recorded creation timeout')
     args = parser.parse_args(argv)
     positive_timeout(args.timeout)
+    if args.reconcile_qfi is not None and not args.cleanup_from:
+        parser.error('--reconcile-qfi requires --cleanup-from')
     if not args.cleanup_from and (not args.imsi or not args.imei):
         parser.error('--imsi and --imei are required for a new trial')
     report = {'schema_version':1,'kind':'qos_flow_feasibility','run_id':uuid4().hex,
@@ -106,13 +110,17 @@ def main(argv=None):
         if previous:
             report['source_run_id'] = previous['run_id']
             report['plan'] = previous['plan']
-            report['creation'] = previous['creation']
-            # Require the saved correlated creation receipt, not a guessed QFI.
-            responses = [e['payload'] for e in previous['events'] if e['event']=='creation_response']
-            if len(responses) != 1 or any(responses[0].get(k) != report['creation'].get(k)
-                    for k in ('pdu_session_id','qos_flow_id')) or 'warning' in responses[0]:
-                raise ValidationError('Missing or inconsistent saved creation response')
-            qos_trial.observe(api,report['plan'],report['creation'],args.timeout)
+            if args.reconcile_qfi is not None:
+                report['reconciliation'] = qos_trial.reconcile_timeout(api,previous,args.reconcile_qfi,args.timeout)
+                cleanup_evidence = report['reconciliation']
+            else:
+                report['creation'] = previous['creation']
+                responses = [e['payload'] for e in previous['events'] if e['event']=='creation_response']
+                if len(responses) != 1 or any(responses[0].get(k) != report['creation'].get(k)
+                        for k in ('pdu_session_id','qos_flow_id')) or 'warning' in responses[0]:
+                    raise ValidationError('Missing or inconsistent saved creation response')
+                qos_trial.observe(api,report['plan'],report['creation'],args.timeout)
+                cleanup_evidence = report['creation']
         else:
             report['plan'] = qos_trial.prepare(api,args.imsi,args.imei,args.apn,
                 args.remote_port,args.five_qi,args.timeout)
@@ -124,6 +132,11 @@ def main(argv=None):
         if not policy():
             report['result'] = {'status':'policy_not_established','write_sent':False}
             return 2
+        if args.reconcile_qfi is not None:
+            print('Confirm this sole new flow belongs to your timed-out trial and no other operator created it.')
+            if not confirmed('RECONCILE',report['reconciliation']):
+                report['result'] = {'status':'cleanup_pending','write_sent':False}
+                return 2
         if not previous:
             report['creation'] = qos_trial.create(api,report['plan'],
                 confirm=lambda p:confirmed('CREATE',p), record=record,
@@ -138,7 +151,8 @@ def main(argv=None):
             report['observed'] = qos_trial.observe(api,report['plan'],report['creation'],args.timeout)
             print('Test flow exists. QoS values and throughput are NOT verified by this observation.')
             save(path,report)
-        report['cleanup'] = qos_trial.cleanup(api,report['plan'],report['creation'],
+            cleanup_evidence = report['creation']
+        report['cleanup'] = qos_trial.cleanup(api,report['plan'],cleanup_evidence,
             confirm=lambda r:confirmed('CLEANUP',r),record=record,policy_confirmed=True,timeout=args.timeout)
         save(path,report)
         if report['cleanup']['status'] != 'cleanup_sent':

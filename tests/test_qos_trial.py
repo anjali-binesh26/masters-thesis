@@ -134,6 +134,27 @@ class TestQoSTrial(unittest.TestCase):
                 prepare_execution(self.api,request)
         self.assertEqual(self.writes(),[])
 
+    def test_timeout_reconciliation_is_observation_not_receipt(self):
+        previous = {'plan':self.plan,'result':{'status':'unknown'},'events':[
+            {'event':'send','payload':dict(self.plan['request'],message_id='trial')},
+            {'event':'timeout','payload':{'message':'ue_activate_dedicated_bearer','message_id':'trial'}}]}
+        self.api.send.return_value = state(flows=(3,))
+        evidence = trial.reconcile_timeout(self.api,previous,3)
+        self.assertEqual(evidence['status'],'observed_after_timeout')
+        self.assertFalse(evidence['creation_acknowledged'])
+        self.assertNotIn('creation',previous)
+        self.assertEqual(self.writes(),[])
+        for reply in (state(),state(flows=(3,4)),state(flows=(3,),tmsi=202)):
+            self.api.send.return_value = reply
+            with self.assertRaises(ValidationError):
+                trial.reconcile_timeout(self.api,previous,3)
+        self.api.send.return_value = state(flows=(3,))
+        with self.assertRaises(ValidationError):
+            trial.reconcile_timeout(self.api,previous,1)
+        previous['events'][1]['payload']['message_id'] = 'wrong'
+        with self.assertRaises(ValidationError):
+            trial.reconcile_timeout(self.api,previous,3)
+
     def test_schema_rejects_malformed_filters_and_out_of_scope_values(self):
         variants = []
         for name,value in [('qci',1),('imei','123'),('imsi',False)]:
