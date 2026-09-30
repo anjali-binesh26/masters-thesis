@@ -86,7 +86,15 @@ support for this new report format.
 - A returned flow ID is only an acknowledgment. CHECK requires exactly that new
   flow and the original registration/session. It does not claim QoS verification.
 - If the creation reply is lost or malformed, never repeat CREATE or guess a
-  cleanup ID. Inspect state and the private report first.
+  cleanup ID. Inspect state and the private report first. For a recorded timeout,
+  `--cleanup-from ORIGINAL_REPORT --reconcile-qfi OBSERVED_ID --execute` can
+  reconcile a sole new dedicated flow in the unchanged original session. It needs
+  separate RECONCILE and CLEANUP approvals, plus the release-policy approval (use
+  `--assume-release-default` where applicable). RECONCILE confirms operator
+  attribution to the trial; absence of other concurrent operators must be checked.
+  Evidence is marked `observed_after_timeout`, never a fabricated API receipt.
+  The original report is preserved and no creation is resent. Multiple flows,
+  changed registration/session, default QFI, or missing matching timeout cause a stop.
 - If creation was recorded successfully but cleanup was declined/interrupted,
   resume with the original private report, the same endpoint, and a fresh policy
   confirmation:
