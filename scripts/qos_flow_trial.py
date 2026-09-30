@@ -44,6 +44,8 @@ def main(argv=None):
                         help='Isolated UDP test port; no traffic generator is started')
     parser.add_argument('--five-qi',type=int,choices=range(5,10),default=9)
     parser.add_argument('--execute',action='store_true',help='Otherwise read-only preflight')
+    parser.add_argument('--assume-release-default',action='store_true',
+                        help='Allow explicit approval of the documented false default, not verified runtime policy')
     parser.add_argument('--cleanup-from',type=Path,help='Trusted private trial report; never LLM output')
     args = parser.parse_args(argv)
     positive_timeout(args.timeout)
@@ -64,14 +66,24 @@ def main(argv=None):
 
     def policy():
         print('Cleanup can release the entire PDU session if automatic_release=true.')
-        print('Only confirm if you established automatic_release=false for this APN;')
-        print('a vendor default or UE snapshot alone does not establish the current policy.')
-        source = input('Record how/where you checked the current release policy (blank cancels): ').strip()
+        assumed = args.assume_release_default
+        if assumed:
+            print('You are relying on the documented false default after checking configuration.')
+            print('Runtime policy remains unverified. Approval accepts possible loss of this')
+            print('test phone\'s internet PDU session during cleanup; preservation is not guaranteed.')
+        else:
+            print('Only confirm if you established automatic_release=false for this APN;')
+            print('a vendor default or UE snapshot alone does not establish the current policy.')
+        source = input('Record your release-policy evidence and its limitations (blank cancels): ').strip()
         if not source:
             return False
-        allowed = confirmed('POLICY',{'operator_established_automatic_release':False,
-                                     'apn':report['plan']['before']['apn'],'source':source})
-        report['release_policy'] = {'operator_confirmed':allowed,'source':source,'checked_at':stamp()}
+        evidence = {'basis':'documented_default_assumption' if assumed else 'operator_established',
+                    'automatic_release_expected':False,'runtime_verified_by_runner':False,
+                    'apn':report['plan']['before']['apn'],'source':source,
+                    'session_release_risk_accepted':False}
+        allowed = confirmed('ASSUME_DEFAULT' if assumed else 'POLICY',evidence)
+        evidence['session_release_risk_accepted'] = assumed and allowed
+        report['release_policy'] = {**evidence,'operator_confirmed':allowed,'checked_at':stamp()}
         save(path,report)
         return allowed
 

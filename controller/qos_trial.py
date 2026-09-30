@@ -2,7 +2,8 @@
 
 No throughput or complete QoS verification is inferred from ue_get. Creation
 requires an empty dedicated-flow baseline and an operator-established release
-policy. Cleanup targets only the ID returned for this recorded creation.
+policy or explicit approval of the documented-default assumption and its session
+release risk. Cleanup targets only the ID returned for this recorded creation.
 """
 import copy
 
@@ -89,7 +90,7 @@ def current(api, plan, timeout):
 
 def create(api, plan, *, confirm, record, policy_confirmed=False, timeout=5):
     if policy_confirmed is not True:
-        raise ValidationError('Establish automatic_release=false before creating a test flow')
+        raise ValidationError('Release policy or documented-default risk must be approved before creation')
     request = normalize_message(plan['request'])
     if request['message'] != 'ue_activate_dedicated_bearer':
         raise ValidationError('Expected flow creation')
@@ -140,7 +141,7 @@ def observe(api, plan, receipt, timeout=5):
 
 def cleanup(api, plan, receipt, *, confirm, record, policy_confirmed=False, timeout=5):
     if policy_confirmed is not True:
-        raise ValidationError('Reconfirm automatic_release=false before cleanup')
+        raise ValidationError('Release policy or documented-default risk must be approved before cleanup')
     request = cleanup_request(plan,receipt)
     observe(api,plan,receipt,timeout)
     if not confirm(copy.deepcopy(request)):

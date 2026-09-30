@@ -19,7 +19,7 @@ The API uses `qci` for the 5QI in the activation request, even for a 5G UE.
 ## Release-policy prerequisite
 
 The manual states that `automatic_release=true` releases the entire PDU session
-when its last non-default flow is removed. Therefore the trial requires an
+when its last non-default flow is removed. The normal path requires an
 operator-established `automatic_release=false` for the selected APN. The default
 is false, but absence from a UE snapshot does not establish the current policy.
 The documented config_get response does not promise this field.
@@ -28,13 +28,22 @@ Read the active configuration and its includes without editing them. For the
 previously identified lab config, this SSH command finds relevant lines:
 
 ```bash
-grep -nE 'include|apn[[:space:]]*:|automatic_release' /root/ltemme-linux-2024-06-15/config/Sonam_files/mmeSonam.cfg
+grep -nE 'include|access_point_name|automatic_release' /root/ltemme-linux-2024-06-15/config/Sonam_files/mmeSonam.cfg
 ```
 
 This is a locator, not proof: check which APN block a value belongs to, includes,
-and whether anyone changed the runtime policy. If unresolved, stop after the
-read-only preflight. Do not enter POLICY just to bypass the prerequisite.
+and whether anyone changed the runtime policy. Do not enter POLICY to label an
+assumption as an established runtime value.
 The runner records an operator attestation, not a live verification of this flag.
+
+After checking the relevant configuration and includes with no override found,
+an operator may explicitly choose `--assume-release-default`. This replaces
+POLICY with ASSUME_DEFAULT and records the baseline as an assumption. Approval
+accepts that cleanup might release this test phone's internet session if runtime
+policy differs. If that disruption is unacceptable, stop after read-only preflight.
+No automatic re-registration or configuration change is performed to recover a
+released session; the original-session verification will fail honestly.
+The assumption flag is needed again for a resumed cleanup using that policy.
 
 ## Workstation commands
 
