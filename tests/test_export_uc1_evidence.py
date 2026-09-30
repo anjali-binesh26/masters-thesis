@@ -5,9 +5,11 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from scripts.export_uc1_evidence import main, render, summarize, safe_request
+from scripts.export_uc1_evidence import (
+    main, render, summarize, safe_request, run_interactive, parse_netsight_log, _fence_for)
 
 
 class TestEvidenceExport(unittest.TestCase):
@@ -120,6 +122,166 @@ class TestEvidenceExport(unittest.TestCase):
                 self.assertIn('d'*32, lines[1])
                 self.assertEqual(main([str(root/'logs'/f'uc1-{"a"*32}.json'), '--write']), 0)
             self.assertTrue((root/'llm_outputs'/'controller evidence'/f'2026-09-30_120000Z_{"a"*32}.md').exists())
+
+
+def _make_report(run_id, started_at, status='verified', extra=None):
+    report = {
+        'run_id': run_id, 'started_at': started_at,
+        'endpoint': 'ws://private.example:9000',
+        'plan': {'mode': 'config',
+                 'request': {'message': 'config_set', 'logs': {'layers': {'NAS': {'level': 'info'}}}}},
+        'events': [
+            {'at': started_at, 'event': 'send', 'payload': {'message': 'config_set'}},
+            {'at': started_at, 'event': 'response', 'payload': {
+                'message': 'config_set', 'license_id': 'license-secret',
+                'imsi': '001019999999999'}},
+        ],
+        'result': {'status': status, 'verified': True,
+                   'before': {'logs.layers.NAS.level': 'debug'},
+                   'after': {'logs.layers.NAS.level': 'info'},
+                   'response': {'license_user': 'private-org'}},
+    }
+    if extra:
+        report.update(extra)
+    return report
+
+
+class TestInteractiveTrial(unittest.TestCase):
+    def setUp(self):
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.tmp = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
+        self.project = self.tmp / 'masters-thesis'
+        self.netsight = self.tmp / 'netsight'
+        (self.project / 'logs').mkdir(parents=True)
+        (self.project / 'llm_outputs' / 'use case 1').mkdir(parents=True)
+        (self.netsight / 'attachments').mkdir(parents=True)
+        (self.netsight / 'output').mkdir(parents=True)
+        (self.netsight / 'logs').mkdir(parents=True)
+        (self.netsight / 'attachments' / 'operator_request.txt').write_text(
+            'Set the core-wide T3512 timer to 10 minutes.\n', encoding='utf-8')
+        (self.netsight / 'output' / 'interfaces.md').write_text(
+            'Status: READY\n\n```json\n{"message": "config_set", "t3512": 600}\n```\n', encoding='utf-8')
+        (self.netsight / 'logs' / 'netsight_2026-09-30_12-00-00.log').write_text(
+            '2026-09-30 12:00:00 [INFO] Model: gemma4:31b\n'
+            '2026-09-30 12:00:01 [INFO] Token usage: input=36357, output=780, total=37137\n'
+            '2026-09-30 12:02:20 [INFO] Done. (140.9s)\n', encoding='utf-8')
+        self.patchers = [patch('scripts.export_uc1_evidence.PROJECT', self.project)]
+        for patcher in self.patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _run(self, answers, netsight_dir=None):
+        queue = iter(answers)
+        out = io.StringIO()
+        args = SimpleNamespace(netsight_dir=netsight_dir or self.netsight)
+        with contextlib.redirect_stdout(out):
+            code = run_interactive(args, input_func=lambda prompt: next(queue), print_func=print)
+        return code, out.getvalue()
+
+    def _write_report(self, run_id, started_at, status='verified', extra=None):
+        report = _make_report(run_id, started_at, status, extra)
+        (self.project / 'logs' / f'uc1-{run_id}.json').write_text(json.dumps(report), encoding='utf-8')
+        return report
+
+    def test_successful_change_with_restoration(self):
+        self._write_report('a' * 32, '2026-09-30T12:00:00Z')
+        self._write_report('c' * 32, '2026-09-30T13:00:00Z',
+                            extra={'restore_from': f'logs/uc1-{"a"*32}.json'})
+        # log select=1, change=1, restoration=default(2), filename, confirm
+        code, out = self._run(['1', '1', '', 'trial-one', 'y'])
+        self.assertEqual(code, 0)
+        target = self.project / 'llm_outputs' / 'use case 1' / 'trial-one.md'
+        self.assertTrue(target.exists())
+        text = target.read_text(encoding='utf-8')
+        self.assertIn('Sanitized controller change evidence', text)
+        self.assertIn('Sanitized restoration evidence', text)
+        self.assertIn('a' * 32, text)
+        self.assertIn('c' * 32, text)
+        self.assertIn('Agent elapsed time: 140.9s', text)
+        self.assertIn('Model: gemma4:31b', text)
+        self.assertIn('Not recorded', text)  # Assessment section
+        self.assertIn(out, out)  # preview printed
+
+    def test_clarification_without_execution(self):
+        # No controller reports exist at all.
+        code, out = self._run(['', 'trial-refusal', 'y'])
+        self.assertEqual(code, 0)
+        target = self.project / 'llm_outputs' / 'use case 1' / 'trial-refusal.md'
+        text = target.read_text(encoding='utf-8')
+        self.assertIn('None selected. This trial recorded no controller execution.', text)
+        self.assertNotIn('Sanitized restoration evidence', text)
+
+    def test_llm_response_with_fenced_json_block_preserved_verbatim(self):
+        # A response embedding its own ```json fence must not corrupt the outer fence.
+        fenced_response = (
+            'Status: READY\n\nProposal:\n```json\n{"message": "config_set", "t3512": 600}\n```\n')
+        (self.netsight / 'output' / 'interfaces.md').write_text(fenced_response, encoding='utf-8')
+        code, out = self._run(['', 'trial-fenced', 'y'])
+        self.assertEqual(code, 0)
+        target = self.project / 'llm_outputs' / 'use case 1' / 'trial-fenced.md'
+        text = target.read_text(encoding='utf-8')
+        self.assertIn(fenced_response, text)
+        outer_fence = _fence_for(fenced_response)
+        self.assertIn(f'{outer_fence}\n{fenced_response}\n{outer_fence}', text)
+        self.assertGreater(len(outer_fence), 3)
+
+    def test_missing_or_mismatched_source_files(self):
+        (self.netsight / 'attachments' / 'operator_request.txt').unlink()
+        alt = self.tmp / 'alt_request.txt'
+        alt.write_text('Alternate operator request text.\n', encoding='utf-8')
+        # operator missing -> supply alt path; interfaces present; log=1;
+        # no reports exist, so no report-selection prompt; filename; confirm
+        code, out = self._run([str(alt), '1', 'trial-alt', 'y'])
+        self.assertEqual(code, 0)
+        target = self.project / 'llm_outputs' / 'use case 1' / 'trial-alt.md'
+        text = target.read_text(encoding='utf-8')
+        self.assertIn('Alternate operator request text.', text)
+        self.assertIn(str(alt.name), text)
+
+        # Now test skipping a missing file entirely (blank answer -> Not recorded).
+        (self.netsight / 'output' / 'interfaces.md').unlink()
+        code, out = self._run([str(alt), '', '1', 'trial-skip', 'y'])
+        self.assertEqual(code, 0)
+        text = (self.project / 'llm_outputs' / 'use case 1' / 'trial-skip.md').read_text(encoding='utf-8')
+        self.assertIn('Not recorded: source file unavailable at export time.', text)
+
+    def test_secret_exclusion_from_controller_evidence(self):
+        self._write_report('a' * 32, '2026-09-30T12:00:00Z')
+        code, out = self._run(['1', '1', '', 'trial-secret', 'y'])
+        self.assertEqual(code, 0)
+        text = (self.project / 'llm_outputs' / 'use case 1' / 'trial-secret.md').read_text(encoding='utf-8')
+        for secret in ('license-secret', '001019999999999', 'private-org', 'private.example'):
+            self.assertNotIn(secret, text)
+
+    def test_overwrite_and_path_traversal_protection(self):
+        existing = self.project / 'llm_outputs' / 'use case 1' / 'existing.md'
+        existing.write_text('# Pre-existing\n', encoding='utf-8')
+        original = existing.read_text(encoding='utf-8')
+        # log=1, no reports, traversal filename rejected, existing filename rejected,
+        # then a valid new filename succeeds.
+        code, out = self._run(['1', '../evil.md', 'existing', 'trial-ok', 'y'])
+        self.assertEqual(code, 0)
+        self.assertEqual(existing.read_text(encoding='utf-8'), original)
+        self.assertFalse((self.tmp / 'evil.md').exists())
+        self.assertTrue((self.project / 'llm_outputs' / 'use case 1' / 'trial-ok.md').exists())
+
+    def test_preserves_original_files(self):
+        report = self._write_report('a' * 32, '2026-09-30T12:00:00Z')
+        operator_before = (self.netsight / 'attachments' / 'operator_request.txt').read_bytes()
+        interfaces_before = (self.netsight / 'output' / 'interfaces.md').read_bytes()
+        log_before = (self.netsight / 'logs' / 'netsight_2026-09-30_12-00-00.log').read_bytes()
+        report_before = (self.project / 'logs' / f'uc1-{"a"*32}.json').read_bytes()
+        code, out = self._run(['1', '1', '', 'trial-preserve', 'y'])
+        self.assertEqual(code, 0)
+        self.assertEqual((self.netsight / 'attachments' / 'operator_request.txt').read_bytes(), operator_before)
+        self.assertEqual((self.netsight / 'output' / 'interfaces.md').read_bytes(), interfaces_before)
+        self.assertEqual((self.netsight / 'logs' / 'netsight_2026-09-30_12-00-00.log').read_bytes(), log_before)
+        self.assertEqual((self.project / 'logs' / f'uc1-{"a"*32}.json').read_bytes(), report_before)
+
+    def test_parse_netsight_log_missing_fields_not_invented(self):
+        info = parse_netsight_log('2026-09-30 12:00:00 [INFO] Something unrelated\n')
+        self.assertEqual(info, {})
 
 
 if __name__ == '__main__':

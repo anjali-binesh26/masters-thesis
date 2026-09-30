@@ -83,6 +83,26 @@ it is not a digital signature. Review the complete Markdown before publishing:
 existing LLM/terminal text is preserved and is NOT sanitized. The exporter does
 not infer a failure reason from omitted text or turn unverified outcomes into success.
 
+## Interactive trial record (operator request + LLM response + controller evidence)
+
+To build one combined Markdown trial record — operator request, LLM response,
+NetSight measurements and sanitized controller evidence in a single file — run:
+
+```bash
+python scripts/export_uc1_evidence.py --interactive
+```
+
+This reads `attachments/operator_request.txt`, `output/interfaces.md` and any
+`logs/netsight_*.log` from the sibling `../netsight` repository (override with
+`--netsight-dir`), lets you pick a controller change report and an optional
+restoration report from `logs/uc1-*.json`, previews the assembled record, and
+only saves it under `llm_outputs/use case 1/` after you confirm. It never
+connects to the Callbox, calls an LLM, or modifies the source files it reads.
+Missing expected files are never invented; you are asked for a path or can
+skip. Existing files are never overwritten, and only plain filenames inside
+`llm_outputs/use case 1/` are accepted. This mode creates new records only;
+it does not rewrite the append/export workflow above.
+
 ## Optional NetSight handoff (later)
 
 ```bash
