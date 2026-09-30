@@ -1,6 +1,12 @@
 ## Operator request:
 Reduce logging.
 
+## Evidence review — 30 September 2026
+
+Result: the model returned `NEEDS_INPUT`, asking which layer and setting the operator intended. It did not generate executable JSON. This is a successful clarification trial for this input.
+
+No controller execution report is required for this trial: there was no executable proposal to submit. Do not attach an unrelated controller run as evidence of executing this response. The model response and NetSight timing log below are the relevant evidence.
+
 ## LLM response:
 Status: NEEDS_INPUT
 

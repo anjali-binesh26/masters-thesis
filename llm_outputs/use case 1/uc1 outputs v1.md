@@ -2,6 +2,20 @@
 Set the NGAP logging level to info.
 Do not change any other setting.
 
+## Evidence review — 30 September 2026
+
+The model produced the expected `config_set` proposal for NGAP logging at `info`, without unrelated changes. The following saved controller trials demonstrate execution and restoration of the same operation:
+
+| Controller trial | Result | Sanitized evidence |
+|---|---|---|
+| NGAP level debug → info | Verified by live read-back | [Change report](../controller%20evidence/2026-09-28_145655Z_e9354b2c8d35430199e0e76dbb86b1eb.md) |
+| NGAP level info → debug | Verified restoration; report references the change run | [Restoration report](../controller%20evidence/2026-09-28_145828Z_e5ee2d9579e8421c88c04d4e639bcdd4.md) |
+| Human declines APPLY for NGAP level change | Cancelled; no write send intent recorded | [Cancellation report](../controller%20evidence/2026-09-28_161346Z_0a76037054424f13a8f74726d7a4663a.md) |
+
+These are related controller tests, not an automatically established LLM-to-execution chain. The proposal matches the operation, but the logs do not record a shared trial identifier or the source LLM output. Controller timestamps explicitly use UTC; the NetSight console timestamps below do not include a timezone, so they must not be used to infer a link without checking the workstation configuration.
+
+Conclusion: correct LLM proposal, independently demonstrated execution/restoration of that operation, and demonstrated enforcement of human cancellation. Original model output and console evidence are preserved below.
+
 ## LLM response:
 Status: READY
 Interpretation: Set the logging level for the NGAP layer to 'info' using the config\_set operation.
