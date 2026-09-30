@@ -1,0 +1,5 @@
+NetSight handoff succeeded: proposal extracted and validated, COPY/RUN approvals obtained, controller CONNECT/APPLY approvals preserved, NAS change verified, and restoration verified.
+
+- **Phone ending 20787:** Initial creation timed out; a later attempt with a 30-second timeout succeeded, and cleanup restored the original session. Reports: `qos-trial-a9f5938ee0294e29b3cd2320a13fb631.json` (timeout), `qos-trial-00a86fbe466c452c94a93766fb787002.json` (success), `uc1-63a739333c11451e9afedafa422d1d6e.json` (diagnostic signalling).
+- **Phone ending 67580:** Creation timed out, but QFI 2 appeared afterward; approved reconciliation and cleanup restored the original session. Keep `qos-trial-c2729ee28ecf490983644f2b9fb9e12d.json` and the latest recovery report containing that `source_run_id` and `session_restored`.
+- Both phones’ test flows were removed; **full QoS performance and coordinated UC2 remain unverified**.

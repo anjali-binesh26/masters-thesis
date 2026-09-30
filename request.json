@@ -1,4 +1,9 @@
 {
-  "message": "config_set",
-  "t3512": 600
+  "message": "log_get",
+  "min": 0,
+  "max": 4096,
+  "timeout": 1,
+  "allow_empty": true,
+  "start_timestamp": 1790784540000,
+  "end_timestamp": 1790784670000
 }
